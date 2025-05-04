@@ -1,0 +1,58 @@
+file: app.py
+
+from flask import Flask, render_template, jsonify, request import requests import pandas as pd import talib import os
+
+app = Flask(name) BINANCE_API_KEY = os.getenv("BINANCE_API_KEY") BASE_URL = "https://fapi.binance.com"
+
+@app.route("/") def index(): return render_template("index.html")
+
+@app.route("/analyze") def analyze(): coins = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "AVAXUSDT", "ADAUSDT"] interval = "1h" limit = 100 results = []
+
+for symbol in coins:
+    url = f"{BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    res = requests.get(url)
+    data = res.json()
+    df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume", "close_time", "qav", "trades", "taker_buy_vol", "taker_buy_qav", "ignore"])
+    df["close"] = df["close"].astype(float)
+    df["time"] = pd.to_datetime(df["time"], unit='ms')
+
+    close = df["close"]
+    ema7 = talib.EMA(close, timeperiod=7)
+    ema25 = talib.EMA(close, timeperiod=25)
+    ema99 = talib.EMA(close, timeperiod=99)
+    rsi = talib.RSI(close, timeperiod=14)
+    macd, macdsignal, macdhist = talib.MACD(close)
+
+    signal = "NEUTRAL"
+    reason = []
+    if ema7.iloc[-1] > ema25.iloc[-1] and rsi.iloc[-1] > 55:
+        signal = "LONG"
+        reason.append("EMA7 > EMA25 and RSI > 55")
+    elif ema7.iloc[-1] < ema25.iloc[-1] and rsi.iloc[-1] < 45:
+        signal = "SHORT"
+        reason.append("EMA7 < EMA25 and RSI < 45")
+
+    price = close.iloc[-1]
+    take_profit = price * (1.01 if signal == "LONG" else 0.99)
+    stop_loss = price * (0.99 if signal == "LONG" else 1.01)
+
+    results.append({
+        "symbol": symbol,
+        "price": price,
+        "ema7": ema7.iloc[-1],
+        "ema25": ema25.iloc[-1],
+        "ema99": ema99.iloc[-1],
+        "rsi": rsi.iloc[-1],
+        "macd": macd.iloc[-1],
+        "macdsignal": macdsignal.iloc[-1],
+        "signal": signal,
+        "reason": reason,
+        "take_profit": take_profit,
+        "stop_loss": stop_loss
+    })
+return jsonify(results)
+
+@app.route("/klines") def klines(): symbol = request.args.get("symbol") interval = request.args.get("interval", "1h") limit = 100 url = f"{BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}" res = requests.get(url) data = res.json() result = [{ "time": int(k[0]), "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]) } for k in data] return jsonify(result)
+
+if name == 'main': app.run(debug=True)
+
